@@ -1,0 +1,304 @@
+---
+title: "Using R for Big Data"
+author: 
+- Lexin Li, Division of Biostatistics, UC Berkeley 
+- lexinli@berkeley.edu
+output:
+  html_document:
+    toc: true
+    theme: journal
+    highlight: haddock
+---
+
+## 1.	Parallelization
+
+### 1.1. Some basic terminology
++ **core**: different processing units available on a single node.
+
++ **node**: different computers, each with their own distinct memory, that make up a cluster or a supercomputer.
+
++  **process**: computational tasks executing on a machine; multiple processes may be executed simultaneously. A given program may start multiple processes simultaneously. Ideally we have no more processes than the number of cores on a node.
+
++ **thread**: multiple paths of execution within a single process. The OS sees a thread as a single process, but one can think of it as a 'lightweight' process. Ideally when considering the processes and their threads, we would have no more processes and threads combined than the number of cores on a node.
+
++ **forking**: child processes are spawned that are identical to the parent, but with different process IDs and their own memory.
+
++ **socket**: some of parallel functionality in R involves creating new R processes and communicating with them via a communication technology called sockets.
+
+
+
+### 1.2. Memory:  shared memory *versus* distributed memory
+
++ **Shared memory parallelization**: Each core is accessing the same memory so there is no need to pass information, in the form of messages, between different machines. But in some programming contexts one has to be careful that activities on different cores do not mistakenly overwrite the places in memory that are used by other cores. We will focus on the shared memory parallelization in this lab. 
+
+
++ **Distirbuted memory parallelization**: Parallel programming requires passing messages between  different nodes. The standard protocol for doing this is MPI, of which there are various versions, including *openMPI*.
+    + R: The package *Rmpi* implements MPI in R. The *pbd* packages for R also implement MPI as well as distributed linear algebra (linear algebra calculations across nodes). 
+
+    + Python: The package *mpi4py* allows use of MPI within Python.
+
+    + Matlab: It has its own system for distributed computation, called the **Distributed Computing Server** (DCS), requiring additional licensing. 
+
+
+
+### 1.3. More parallel processing: 
+
++ **GPU**: **Graphics Processing Units** (GPUs) are processing units originally designed for rendering graphics on a computer quickly. This is done by having a large number of simple processing units for massively parallel calculation. The idea of general-purpose GPU (GPGPU) computing is to exploit this capability for general computation. For more information, refer to [the workshop on using GPUs](http://statistics.berkeley.edu/computing/gpu) by Chris Paciorek of Department of Statistics in Spring 2014. 
+
+
++ **Spark and Hadoop**: Spark and Hadoop are systems for implementing computations in a distributed memory environment, using the MapReduce approach. For more information, refer to [the workshop on using Spark](http://statistics.berkeley.edu/computing/gpu) by Chris Paciorek of Department of Statistics in Fall 2014. 
+
+
+
+
+
+## 2. Read and handle a large dataset 
+
+### 2.1. The *data.table* package 
+
+The *data.table* package provides functions for fast manipulation of large datasets, such as indexing, merges/joins, assignment, grouping, among others. 
+
+As an example, we work with [the airline dataset](https://bcourses.berkeley.edu/courses/1469202/files/folder/Lab/Lab2/AirlineDataAll.csv), which has 123,534,969 observations and 29 covariates. 
+
+```{r, eval=TRUE, warning=FALSE}
+library(data.table)
+
+fileName <- '../data/airlines/AirlineDataAll.csv'
+
+system.time(
+  dt1 <- read.csv(fileName, colClasses=c(rep("numeric", 8), "factor",
+                            "numeric", "factor", rep("numeric", 5),
+                            rep("factor", 2), rep("numeric", 4),
+                            "factor", rep("numeric", 6)))
+)
+
+system.time(
+  dt2 <- fread(fileName, colClasses=c(rep("numeric", 8), "factor",
+                            "numeric", "factor", rep("numeric", 5),
+                            rep("factor", 2), rep("numeric", 4),
+                            "factor", rep("numeric", 6)))
+)
+
+dt2
+class(dt2)
+```
+
+Next we do some basic subsetting. We see that setting a key and using binary search can improve the lookup speed dramatically.
+
+```{r, eval=TRUE, warning=FALSE}
+## vector scan
+system.time(sfo1 <- subset(dt1, Origin == "SFO"))
+
+## binary search
+system.time(setkey(dt2, Origin, Distance))
+tables()
+system.time(sfo2 <- dt2[.('SFO'), ])
+```
+
+Setting a key in *data.table* amounts to sorting based on the columns provided, which allows for fast lookup later using binary search algorithms, as seen with the last query. Think about the analogy of looking up by name versus index. There is much more about *data.table*, and you will have to learn a modest amount of new syntax. But if you are working with large datasets in memory, it will probably be worthwhile. In addition, the *data.table* object is a *dataframe*, so it is compatible with the R code that uses *dataframe*.
+
+
+
+### 2.2. The *dplyr* package 
+
+The *dplyr* package is the successor to the *plyr* package, providing the *plyr* type functions for data frames with enhancements for working with large tables and databases. With *dplyr*, one can work with data stored in the *data.table* format, as well as in external databases.
+
+```{r, eval=TRUE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(dtplyr)
+library(data.table)
+
+fileName <- '../data/airlines/AirlineDataAll.csv'
+
+system.time(
+  flights <- tbl_dt(fread(fileName, colClasses=c(rep("numeric", 8), "factor",
+                            "numeric", "factor", rep("numeric", 5),
+                            rep("factor", 2), rep("numeric", 4),
+                            "factor", rep("numeric", 6))))
+)
+
+summarize(group_by(flights, UniqueCarrier), mean(DepDelay, na.rm=TRUE))
+group_by(flights, UniqueCarrier) %>% summarize(mean(DepDelay, na.rm=TRUE))
+```
+
+
+
+### 2.3. The *ff* package 
+
+The *ff* package provides functions for memory-efficient storage of large data on disk and fast access. The function *read.{table,csv}.ffdf()* reads in data in chunks, and the arguments are similar to those for *read.{table,csv}()*. The function *ffsave()* allows one to write a copy of the data file in the *ff* binary format, which can be read back into R using the *ffload()* function much faster than reading the original csv file. Also note the reduced size of the binary file compared to the original csv file. 
+
+```{r, eval=TRUE, warning=FALSE, message=FALSE}
+require(ff)
+require(ffbase)
+
+fileName <- '../data/airlines/AirlineDataAll.csv'
+
+system.time(  
+  dat <- read.csv.ffdf(file = fileName, header = TRUE,
+    colClasses = c('integer', rep('factor', 3), rep('integer', 4),
+    'factor', 'integer', 'factor', rep('integer', 5), 'factor',
+    'factor', rep('integer', 4), 'factor', rep('integer', 6))) 
+)
+
+system.time(
+  ffsave(dat, file = '../data/airlines/AirlineDataAll')
+)
+## The file is saved in a binary format as AirlineDataAll.ffData
+## with metadata saved in AirlineDataAll.RData
+
+rm(dat) 
+system.time(
+  ffload('../data/airlines/AirlineDataAll')
+)
+```
+
+Next we do a bit more of exploration of the dataset. 
+
+```{r, eval=TRUE, warning=FALSE, message=FALSE}
+ffload('../data/airlines/AirlineDataAll')
+
+dat$Dest
+
+DestTable <- sort(table.ff(dat$Dest), decreasing = TRUE)
+DestTable
+
+dat$DepDelay[1:50]
+min.ff(dat$DepDelay, na.rm = TRUE)
+max.ff(dat$DepDelay, na.rm = TRUE)
+```
+
+A note of caution. Debugging code involving *ff* can be a hassle because the size gets in the way in various ways. Until you are familiar with the operations on *ff* objects, it is recommended to try to run your code on a small test dataset loaded in as an *ff* object. 
+
+
+
+### 2.4. The *bigmemory* package 
+
+The *bigmemory* package is an alternative way to work with datasets in R that are kept stored on disk rather than read entirely into memory. *bigmemory* provides a *big.matrix* class, so it appears to be limited to datasets with a single type for all the variables. However, one nice feature is that one can use the *big.matrix* object with *foreach* without passing a copy of the matrix to each worker. Rather the workers can access the matrix stored on disk.
+
+
+
+
+
+## 3. Fit GLM with a large dataset
+
+The *biglm* package provides the cability to fit linear model and generalized linear model to large datasets. Next we show how to use *biglm* with *ffdf* objects. We fit a linear model on the airline data. 
+```{r, eval=TRUE, warning=FALSE, message=FALSE}
+library(biglm)
+
+datUse <- subset(dat, ArrDelay < 60*12 & ArrDelay > (-30) &
+                 !is.na(ArrDelay) & !is.na(Distance) & !is.na(DayOfWeek))
+datUse$Distance <- datUse$Distance / 1000  # helps stabilize numerics
+
+system.time(
+  mod <- bigglm(ArrDelay ~ Distance + DayOfWeek, data = datUse)
+)
+summary(mod)
+
+coef <- summary(mod)$mat[,1]
+coef 
+```
+
+
+
+
+
+## 4.	Parallization in R
+
+The discussion here applies **ONLY** if the iterations/loops of the calculations can be done **completely separately and do not depend on one another**. This scenario is called an **embarrassingly parallel** computation. For instance, bootstrap, random forests, cross-validation, and replicated simulation studies can be handled this way. Markov chain or time series evolution cannot.
+
+
+
+### 4.1. Parallization of *for* loops using the *foreach* package 
+
+The *foreach* package provides a *foreach* function that allows one to do *for* loop in parallel. It can use different parallel ``back-ends'': (a) When using *parallel / doParallel* as the back-end, it uses the shared memory cores, and creates multiple processes using forking or sockets. You should see multiple processes (as many as you registered) when you monitor the CPU usage. (b) When using *Rmpi / doMPI* as the back-end, it uses the distributed memory cores. 
+
+```{r, eval=TRUE, warning=FALSE}
+library(parallel) 
+library(doParallel)
+
+library(foreach)
+library(iterators)
+
+taskFun <- function(){
+	mn <- mean(rnorm(10000000))
+	return(mn)
+}
+
+output1 <- NULL
+system.time(
+for(i in 1:30){
+  outSub <- taskFun()
+  output1 <- c(output1, outSub)
+}
+)
+
+nCores <- 4  # to set manually
+registerDoParallel(nCores) 
+system.time(
+output2 <- foreach(i = 1:30, .combine = c) %dopar% {
+	cat('Starting job ', i, '\n', sep = '')
+	outSub <- taskFun()
+	cat('Finishing job ', i, '\n', sep = '')
+	outSub 
+}
+)
+```
+
+Note that *foreach* provides functionality for collecting and managing the results to reduce bookkeeping you have to do. The result of *foreach* is generally a *list*, but we can request the results to be combined in a certain way, as we do here using `.combine = c`.
+
+You can debug by running serially using *%do%* rather than *%dopar%*. Note that you may need to load the packages within the *foreach* construction to ensure a package is available to all of the calculations.
+
+
+
+### 4.2. Parallization of the *apply* function using the *parallel* package
+
+The *parallel* package allows one to parallelize various *apply* functions, such as *apply*, *lapply*, and *sapply*. Note that *parallel* is a default package that is installed automatically with R by default. Here is the [vignette for the parallel package](http://stat.ethz.ch/R-manual/R-devel/library/parallel/doc/parallel.pdf).
+
+One way to parallelize the functions *sapply* and *lapply* relies on starting a cluster using *cluster*, which uses the PSOCK mechanism that starts new jobs via *Rscript* and communicating via sockets.
+
+```{r, eval=TRUE, warning=FALSE}
+library(parallel)
+nCores <- 4  # to set manually 
+cl <- makeCluster(nCores) 
+
+nSims <- 60
+input <- seq_len(nSims) 
+taskFun <- function(i){
+	mn <- mean(rnorm(1000000))
+	return(mn)
+}
+
+system.time(
+	res1 <- sapply(input, taskFun)
+)
+res1 <- parLapply(cl, input, taskFun)
+
+system.time(
+	res2 <- parSapply(cl, input, taskFun)
+)
+
+
+library(rbenchmark)
+benchmark(
+  {res1 <- sapply(input, taskFun)}, 
+  {res2 <- parSapply(cl, input, taskFun)}, 
+  replications = 5
+)
+```
+
+For help with these functions and additional related parallelization functions, including *parApply*, see `help(clusterApply)`.
+
+An alternative way to parallelize these functions is *mclapply*, which uses forking to start the worker processes.
+
+```{r, eval=TRUE}
+system.time(
+	res3 <- mclapply(input, taskFun, mc.cores = nCores) 
+)
+
+```
+
+Also note that some R packages can directly interact with the parallelization packages to work with multiple cores. For instance, the *boot* package can work with the *parallel* package directly. 
+
+
+
+
