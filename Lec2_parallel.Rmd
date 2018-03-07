@@ -66,17 +66,7 @@ library(data.table)
 fileName <- '../data/airlines/AirlineDataAll.csv'
 
 system.time(
-  dt1 <- read.csv(fileName, colClasses=c(rep("numeric", 8), "factor",
-                            "numeric", "factor", rep("numeric", 5),
-                            rep("factor", 2), rep("numeric", 4),
-                            "factor", rep("numeric", 6)))
-)
-
-system.time(
-  dt2 <- fread(fileName, colClasses=c(rep("numeric", 8), "factor",
-                            "numeric", "factor", rep("numeric", 5),
-                            rep("factor", 2), rep("numeric", 4),
-                            "factor", rep("numeric", 6)))
+  dt2 <- fread(fileName)
 )
 
 dt2

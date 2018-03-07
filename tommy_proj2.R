@@ -1,5 +1,4 @@
 library(data.table)
-library(rgl)
 set.seed(244)
 
 # Import the data using fread for faster times.
@@ -26,18 +25,15 @@ num_days <- ((((range / 1000)/60)/60)/24)
 # what is the value of 60 days in acceleratomor (sp) time?
 cutoff <- 1000*60*60*24*60
 cutoff_date <- max - cutoff
+# Turns out there's only one individual who wore the acceleromator for this amount of time?
 
-test_set <- training_data[ which(T > cutoff_date),]
-training_set <- training_data[ which(T <= cutoff_date),]
+# Let's check the histogram of the cutoff time
+test_set <- training_data[ which(T > 1338930532818.5),]
+training_set <- training_data[ which(T <= 1338930532818.5),]
 
 # What does this data look like?
-head(training_set)
+hist(training_data$T)
+# It's apparent that many peole stopped wearing the device after a certain amount of time.
+as.character(quantile(training_data$T))
 
 # We should try and visualize this somehow.
-
-with(df,lines3d(X,Y,Z))
-with(df[1,],points3d(X,Y,Z,size=7,col="red"))
-with(df[-1,],points3d(X,Y,Z,col="blue"))
-axes3d()
-title3d(xlab="X",ylab="Y",zlab="Z")
-
